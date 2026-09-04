@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Invitations Auth — frontend demo</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font: 15px/1.5 system-ui, sans-serif; max-width: 44rem; margin: 2rem auto; padding: 0 1rem; }
+      fieldset { border: 1px solid #8884; border-radius: 8px; margin: 0 0 1rem; padding: 1rem; }
+      legend { font-weight: 600; padding: 0 .4rem; }
+      label { display: block; margin: .4rem 0; }
+      input { width: 100%; padding: .45rem; box-sizing: border-box; }
+      button { padding: .5rem .9rem; margin-right: .4rem; cursor: pointer; }
+      pre { background: #8881; padding: .8rem; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
+      .err { color: #c00; }
+      .ok { color: #060; }
+    </style>
+  </head>
+  <body>
+    <h1>Invitations Auth — frontend demo</h1>
+    <p>
+      Backend: <code id="api"></code> · Token is kept in <code>localStorage</code> and sent as
+      <code>Authorization: Bearer &lt;token&gt;</code>.
+    </p>
+
+    <fieldset>
+      <legend>Register</legend>
+      <label>Username <input id="su-user" value="alice_99" /></label>
+      <label>Password <input id="su-pass" type="password" value="password1" /></label>
+      <button id="signup">Sign up</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Login</legend>
+      <label>Username <input id="si-user" value="alice_99" /></label>
+      <label>Password <input id="si-pass" type="password" value="password1" /></label>
+      <button id="signin">Sign in</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Google</legend>
+      <button id="google">Continue with Google</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Session</legend>
+      <button id="me">Load /me</button>
+      <button id="logout">Log out</button>
+      <p>Token: <code id="token">none</code></p>
+    </fieldset>
+
+    <h2>Result</h2>
+    <pre id="out">—</pre>
+
+    <script>
+      const API = 'http://localhost:3000/api/v1';
+      document.getElementById('api').textContent = API;
+
+      const $ = (id) => document.getElementById(id);
+      const out = $('out');
+
+      const getToken = () => localStorage.getItem('accessToken');
+
+      function setToken(token) {
+        if (token) localStorage.setItem('accessToken', token);
+        else localStorage.removeItem('accessToken');
+        renderToken();
+      }
+
+      function renderToken() {
+        const token = getToken();
+        $('token').textContent = token ? token.slice(0, 32) + '…' : 'none';
+      }
+
+      function show(status, body) {
+        out.className = status >= 200 && status < 300 ? 'ok' : 'err';
+        out.textContent = status + '\n' + JSON.stringify(body, null, 2);
+      }
+
+      async function call(path, { method = 'GET', body, auth = false } = {}) {
+        const headers = {};
+        if (body) headers['Content-Type'] = 'application/json';
+        // Only send the header when we actually hold a token, so the API can
+        // answer with "Missing Authorization header" instead of "malformed".
+        if (auth && getToken()) headers.Authorization = `Bearer ${getToken()}`;
+
+        const response = await fetch(API + path, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const payload = await response.json();
+        show(response.status, payload);
+        return { status: response.status, payload };
+      }
+
+      $('signup').onclick = async () => {
+        const { payload } = await call('/auth/signup', {
+          method: 'POST',
+          body: { username: $('su-user').value, password: $('su-pass').value },
+        });
+        if (payload?.data?.accessToken) setToken(payload.data.accessToken);
+      };
+
+      $('signin').onclick = async () => {
+        const { payload } = await call('/auth/signin', {
+          method: 'POST',
+          body: { username: $('si-user').value, password: $('si-pass').value },
+        });
+        if (payload?.data?.accessToken) setToken(payload.data.accessToken);
+      };
+
+      // Must be a top-level navigation, not fetch(): the browser has to follow
+      // the redirect to Google's consent screen.
+      $('google').onclick = () => {
+        window.location.href = API + '/auth/google';
+      };
+
+      $('me').onclick = () => call('/auth/me', { auth: true });
+
+      $('logout').onclick = async () => {
+        await call('/auth/logout', { method: 'POST', auth: true });
+        setToken(null);
+      };
+
+      // Google sends the browser back to /auth/callback with the token in the
+      // URL fragment. Read it, store it, then strip it from the address bar.
+      (function readOAuthFragment() {
+        if (!location.hash.includes('access_token')) return;
+        const params = new URLSearchParams(location.hash.slice(1));
+        setToken(params.get('access_token'));
+        history.replaceState(null, '', location.pathname);
+        show(200, {
+          source: 'google-callback',
+          token_type: params.get('token_type'),
+          expires_in: Number(params.get('expires_in')),
+        });
+      })();
+
+      renderToken();
+    </script>
+  </body>
+</html>
