@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to main supersedes an in-flight run for the same branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    # Escape hatch: put [skip-tests] anywhere in a commit message and this job
+    # is skipped. `head_commit` covers squash- and merge-commit messages;
+    # `commits.*.message` covers every individual commit carried by the push,
+    # so the marker works wherever it was written. Manual runs always test.
+    if: >-
+      github.event_name != 'push' ||
+      ( !contains(github.event.head_commit.message, '[skip-tests]') &&
+        !contains(join(github.event.commits.*.message, ' '), '[skip-tests]') )
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # mongodb-memory-server downloads a mongod binary on first use; caching it
+      # keeps every run after the first from re-fetching ~100MB.
+      - name: Cache MongoDB binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongodb-binaries-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: mongodb-binaries-${{ runner.os }}-
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run build
+
+      - name: Test
+        run: npm test
+        # The suite supplies its own env via tests/helpers/setup.ts and runs
+        # MongoDB in memory, so no secrets are needed here.
+        env:
+          NODE_ENV: test
