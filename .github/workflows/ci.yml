@@ -61,3 +61,44 @@ jobs:
         # MongoDB in memory, so no secrets are needed here.
         env:
           NODE_ENV: test
+
+  db-sync:
+    name: Sync Atlas indexes
+    needs: test
+    runs-on: ubuntu-latest
+
+    # Only main, and never on top of a red build. `always()` is what lets a
+    # [skip-tests] push through: `needs` alone would skip this job whenever the
+    # test job was skipped, so the two outcomes are spelled out instead.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      always() &&
+      ( needs.test.result == 'success' || needs.test.result == 'skipped' )
+
+    # Named so the cluster credential can be scoped to it, and optionally put
+    # behind a required reviewer in the repo's environment settings.
+    environment: production
+
+    # Deliberately not part of the CI concurrency group above: a schema sync
+    # must never be cancelled halfway through by a newer push.
+    concurrency:
+      group: db-sync-main
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Pin npm
+        run: npm install -g npm@11
+
+      - run: npm ci
+
+      - name: Apply index changes
+        run: npm run db:indexes
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}

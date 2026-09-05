@@ -8,7 +8,9 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:indexes": "tsx src/scripts/sync-indexes.ts",
+    "db:indexes:check": "tsx src/scripts/sync-indexes.ts --dry-run"
   },
   "keywords": [],
   "author": "",

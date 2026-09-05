@@ -23,9 +23,10 @@ JWT bearer tokens, backed by MongoDB.
 8. [API reference](#8-api-reference)
 9. [API documentation (Swagger)](#9-api-documentation-swagger)
 10. [Testing](#10-testing)
-11. [Project structure](#11-project-structure)
-12. [Security notes](#12-security-notes)
-13. [Troubleshooting](#13-troubleshooting)
+11. [Continuous integration and database indexes](#11-continuous-integration-and-database-indexes)
+12. [Project structure](#12-project-structure)
+13. [Security notes](#13-security-notes)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
@@ -406,7 +407,7 @@ Set `SWAGGER_ENABLED=false` to stop serving `/docs`.
 npm test
 ```
 
-45 tests across 6 files. They spin up their own in-memory MongoDB, so **no running database is
+47 tests across 7 files. They spin up their own in-memory MongoDB, so **no running database is
 required** and your development data is never touched.
 
 | File | Covers |
@@ -417,20 +418,88 @@ required** and your development data is never touched.
 | `tests/integration/auth.local.test.ts` | Register/login/logout over HTTP, error cases |
 | `tests/integration/auth.google.test.ts` | Full OAuth callback with Google's token exchange mocked |
 | `tests/integration/openapi.test.ts` | Docs match the real routes; Swagger UI loads |
+| `tests/integration/system.test.ts` | Root ping and the health endpoint |
 
 ---
 
-## 11. Project structure
+## 11. Continuous integration and database indexes
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push to `main`, which includes
+every pull request merged into it.
+
+### Tests
+
+The `test` job typechecks with `tsc` and runs the full suite. It needs **no secrets**: the tests
+supply their own environment and run MongoDB in memory.
+
+To skip it, put `[skip-tests]` anywhere in a commit message:
+
+```bash
+git commit -m "docs: fix a typo [skip-tests]"
+```
+
+The marker is honoured whether it lands in an individual commit or in the squash/merge commit a
+pull request produces. Manually dispatched runs always test.
+
+### Index sync
+
+**MongoDB has no server-side schema.** Documents are shaped and validated by this application, not
+by Atlas, so most model edits need nothing applied to the cluster at all. The one part of a Mongoose
+schema that *is* real cluster state is its **indexes** — here, the `unique` + `sparse` constraints
+on `username`, `email` and `googleId`, which are what make duplicate accounts impossible.
+
+[`src/scripts/sync-indexes.ts`](src/scripts/sync-indexes.ts) reconciles them. It scans
+`src/models/` so a newly added model cannot be forgotten, then reports and applies the difference:
+
+```bash
+npm run db:indexes:check   # report the difference, change nothing
+npm run db:indexes         # apply it
+```
+
+The `db-sync` job runs the same command against Atlas after the tests pass, so an index added to a
+model reaches the cluster on merge. A failed test job blocks it; a *skipped* one (via
+`[skip-tests]`) does not.
+
+To enable it:
+
+1. **Add the secret.** GitHub → Settings → Secrets and variables → Actions → *New repository
+   secret*, named `MONGODB_URI`, holding the Atlas connection string. It is the only secret the job
+   needs. The job declares `environment: production`, so the secret can be scoped there and put
+   behind a required reviewer if you want merges to pause for approval.
+2. **Let the runner reach Atlas.** GitHub-hosted runners have no fixed IP, so Atlas → Network
+   Access must either allow `0.0.0.0/0` (access then rests entirely on the database credentials) or
+   have the runner's IP added and removed around the job through the Atlas Admin API.
+
+Two things worth knowing before you rely on it:
+
+- `syncIndexes()` **drops** any index the schema no longer declares, so an index created by hand in
+  the Atlas UI will be removed on the next run. Run `npm run db:indexes:check` first to see the
+  plan.
+- In production the app no longer builds indexes itself (`autoIndex` is off in
+  [`src/config/database.ts`](src/config/database.ts)), because doing so on Atlas would be retried on
+  every serverless cold start. This job is what creates them.
+
+### What this does not cover
+
+Renaming a field, changing its type, or making an optional field required needs a **data
+migration** — existing documents have to be rewritten, and nothing can infer that from the schema.
+Index sync will not do it and will not warn you. A dedicated migration tool such as `migrate-mongo`
+is the usual answer when that day comes.
+
+---
+
+## 12. Project structure
 
 ```
 src/
-├── app.ts                       # Fastify app factory (plugins, hooks, health route)
+├── app.ts                       # Fastify app factory (plugins, hooks, ping + health routes)
 ├── server.ts                    # Entry point: connect DB, listen, graceful shutdown
 ├── config/
 │   ├── env.ts                   # Zod-validated environment
 │   ├── database.ts              # Mongoose connection (+ in-memory mode)
 │   └── swagger.ts               # OpenAPI document and Swagger UI
 ├── models/user.model.ts         # Mongoose user schema
+├── scripts/sync-indexes.ts      # Reconciles Atlas indexes with the schemas
 ├── schemas/api.schemas.ts       # Shared response envelopes -> OpenAPI
 ├── modules/auth/
 │   ├── auth.routes.ts           # Routes + their OpenAPI schemas
@@ -453,7 +522,7 @@ tests/
 
 ---
 
-## 12. Security notes
+## 13. Security notes
 
 - Passwords hashed with **Argon2id**; `passwordHash` is `select: false` and never serialized
 - Access tokens are stateless JWTs verified from the `Authorization: Bearer` header only
@@ -474,7 +543,7 @@ consider `SWAGGER_ENABLED=false`.
 
 ---
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
