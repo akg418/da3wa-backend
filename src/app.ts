@@ -15,6 +15,7 @@ import {
   commonErrorResponses,
   healthDegradedResponse,
   healthOkResponse,
+  pingResponse,
 } from './schemas/api.schemas';
 import { ErrorCode } from './utils/errors';
 
@@ -73,6 +74,27 @@ export async function buildApp() {
   if (env.SWAGGER_ENABLED) {
     await registerSwagger(app);
   }
+
+  // Liveness probe at the root URL: answers without touching the database, so
+  // it stays green while `/health` reports a degraded dependency.
+  app.get(
+    '/',
+    {
+      schema: {
+        tags: ['System'],
+        summary: 'Ping',
+        description:
+          'Returns `pong`. Cheapest possible check that the process is up and routing requests; it does not touch MongoDB — use `/health` for that.',
+        operationId: 'ping',
+        security: [],
+        response: {
+          200: pingResponse,
+          ...commonErrorResponses,
+        },
+      },
+    },
+    async () => ({ success: true as const, data: { message: 'pong' as const } }),
+  );
 
   app.get(
     `${env.API_PREFIX}/health`,
