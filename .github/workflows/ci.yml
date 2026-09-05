@@ -63,7 +63,7 @@ jobs:
           NODE_ENV: test
 
   db-sync:
-    name: Sync Atlas indexes
+    name: Migrate Atlas
     needs: test
     runs-on: ubuntu-latest
 
@@ -98,7 +98,10 @@ jobs:
 
       - run: npm ci
 
-      - name: Apply index changes
-        run: npm run db:indexes
+      # Order matters: the backfill brings older documents up to the current
+      # shape, and only then can the unique `username` index be built over
+      # them. Running the index sync first fails with a duplicate null key.
+      - name: Migrate
+        run: npm run db:migrate
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}

@@ -3,14 +3,23 @@ import { AppError, ErrorCode } from '../../utils/errors';
 import { hashPassword, verifyPassword } from '../../utils/password';
 import type { GoogleProfile } from './google-oauth.service';
 import type { SigninInput, SignupInput, UserResponse } from './auth.schemas';
+import { allocateUsername } from './username';
+
+/** MongoDB's duplicate-key error. */
+const DUPLICATE_KEY = 11000;
+const MAX_CREATE_ATTEMPTS = 3;
+
+function isDuplicateUsername(error: unknown): boolean {
+  const candidate = error as { code?: number; keyPattern?: Record<string, unknown> };
+  return candidate?.code === DUPLICATE_KEY && candidate.keyPattern?.username !== undefined;
+}
 
 export function toUserResponse(user: IUserDocument): UserResponse {
   return {
     id: user._id.toString(),
     username: user.username,
-    email: user.email,
-    displayName: user.displayName,
-    avatarUrl: user.avatarUrl,
+    // Absent on a local account, so the key is left out of the response too.
+    ...(user.email ? { email: user.email } : {}),
     authProviders: user.authProviders,
   };
 }
@@ -61,27 +70,35 @@ export async function findOrCreateGoogleUser(
     return byGoogleId;
   }
 
-  const byEmail = await User.findOne({ email: profile.email });
+  // Local accounts store an empty `email`, so an empty profile email must not
+  // be allowed to match one of them.
+  const byEmail = profile.email ? await User.findOne({ email: profile.email }) : null;
   if (byEmail) {
     byEmail.googleId = profile.googleId;
     if (!byEmail.authProviders.includes('google')) {
       byEmail.authProviders.push('google');
     }
-    if (!byEmail.displayName && profile.displayName) {
-      byEmail.displayName = profile.displayName;
-    }
-    if (!byEmail.avatarUrl && profile.avatarUrl) {
-      byEmail.avatarUrl = profile.avatarUrl;
-    }
     await byEmail.save();
     return byEmail;
   }
 
-  return User.create({
-    email: profile.email,
-    googleId: profile.googleId,
-    displayName: profile.displayName,
-    avatarUrl: profile.avatarUrl,
-    authProviders: ['google'],
-  });
+  // `allocateUsername` checks availability first, but two concurrent sign-ins
+  // can still land on the same name; the unique index catches that, so retry
+  // with a freshly allocated one rather than failing the sign-in.
+  for (let attempt = 1; attempt <= MAX_CREATE_ATTEMPTS; attempt += 1) {
+    try {
+      return await User.create({
+        username: await allocateUsername(profile.displayName),
+        email: profile.email,
+        googleId: profile.googleId,
+        authProviders: ['google'],
+      });
+    } catch (error) {
+      if (!isDuplicateUsername(error) || attempt === MAX_CREATE_ATTEMPTS) {
+        throw error;
+      }
+    }
+  }
+
+  throw new AppError(ErrorCode.INTERNAL_ERROR, 'Could not create the account', 500);
 }

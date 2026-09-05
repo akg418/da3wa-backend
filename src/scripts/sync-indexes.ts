@@ -66,7 +66,9 @@ async function main(): Promise<void> {
   }
 
   console.log(`${dryRun ? 'Checking' : 'Syncing'} indexes on ${redact(uri)}`);
-  await mongoose.connect(uri);
+  // autoIndex would build indexes in the background as soon as the models are
+  // registered, racing this script and hiding what it actually changed.
+  await mongoose.connect(uri, { autoIndex: false });
 
   let pending = 0;
 
