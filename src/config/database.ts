@@ -17,7 +17,13 @@ export async function connectDatabase(): Promise<void> {
     console.log('Using in-memory MongoDB for local development');
   }
 
-  await mongoose.connect(uri);
+  await mongoose.connect(uri, {
+    // Outside production Mongoose builds declared indexes on connect, which
+    // keeps local development and the test suite self-contained. In production
+    // the CI job owns them (`npm run db:indexes`): Atlas index builds are slow
+    // and would otherwise be attempted on every serverless cold start.
+    autoIndex: env.NODE_ENV !== 'production',
+  });
 }
 
 export async function disconnectDatabase(): Promise<void> {
