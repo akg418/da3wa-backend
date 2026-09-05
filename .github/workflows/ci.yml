@@ -27,10 +27,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Node 26 matches local development and, crucially, ships npm 11 — the
+      # npm major that generated package-lock.json. npm 10 (bundled with Node
+      # 22) resolves mongodb's unsatisfiable optional peer dep on
+      # gcp-metadata@^7 differently and rejects the lockfile as out of sync.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
           cache: npm
+
+      # Belt and braces: don't leave the npm major to whatever the Node release
+      # happens to bundle, since that is what broke `npm ci` before.
+      - name: Pin npm
+        run: npm install -g npm@11
 
       # mongodb-memory-server downloads a mongod binary on first use; caching it
       # keeps every run after the first from re-fetching ~100MB.
