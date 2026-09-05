@@ -10,7 +10,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:indexes": "tsx src/scripts/sync-indexes.ts",
-    "db:indexes:check": "tsx src/scripts/sync-indexes.ts --dry-run"
+    "db:indexes:check": "tsx src/scripts/sync-indexes.ts --dry-run",
+    "db:backfill": "tsx src/scripts/backfill-users.ts",
+    "db:backfill:check": "tsx src/scripts/backfill-users.ts --dry-run",
+    "db:migrate": "npm run db:backfill && npm run db:indexes"
   },
   "keywords": [],
   "author": "",

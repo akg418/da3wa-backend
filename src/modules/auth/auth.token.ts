@@ -21,7 +21,9 @@ export async function issueAccessToken(
   const accessToken = await reply.jwtSign({
     sub: String(user._id),
     username: user.username,
-    email: user.email,
+    // A local account has no email; leave the claim out rather than signing a
+    // null one, since an absent claim is what a JWT consumer expects.
+    ...(user.email ? { email: user.email } : {}),
   });
 
   return {

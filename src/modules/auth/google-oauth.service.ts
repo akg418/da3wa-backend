@@ -6,8 +6,8 @@ import { AppError, ErrorCode } from '../../utils/errors';
 export interface GoogleProfile {
   googleId: string;
   email: string;
+  /** Only used to derive a username; never stored. */
   displayName?: string;
-  avatarUrl?: string;
 }
 
 let oauthClient: OAuth2Client | null = null;
@@ -61,7 +61,6 @@ export async function exchangeGoogleCode(code: string): Promise<GoogleProfile> {
       googleId: payload.sub,
       email: payload.email.toLowerCase(),
       displayName: payload.name,
-      avatarUrl: payload.picture,
     };
   } catch (error) {
     if (error instanceof AppError) {

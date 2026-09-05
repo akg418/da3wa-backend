@@ -243,9 +243,9 @@ still there in the address bar.
 ### Account linking
 
 A Google sign-in whose email matches an existing account attaches `googleId` to it and sets
-`authProviders` to `["local", "google"]`. Note that `POST /auth/signup` does **not** store an
-email, so accounts created that way will not link automatically — a Google sign-in creates a
-separate user.
+`authProviders` to `["local", "google"]`. Note that `POST /auth/signup` stores **no** email at all,
+so accounts created that way will not link automatically — a Google sign-in creates a separate
+user.
 
 ---
 
@@ -350,6 +350,54 @@ Routes under `/auth` are rate limited to **10 requests per minute per IP** and a
 }
 ```
 
+### The user document
+
+Each flow stores **only the fields it has**. Nothing is written as a placeholder, so a field that
+does not apply is simply absent from the document:
+
+| Flow | Document |
+|---|---|
+| `POST /auth/signup` | `username`, `passwordHash`, `authProviders` |
+| Google callback | `username`, `email`, `googleId`, `authProviders` |
+
+Both also carry `_id`, `createdAt` and `updatedAt`.
+
+**Google usernames** come from the display name: lowercased, with spaces turned into underscores,
+so `Ahmed Khaled` becomes `ahmed_khaled`. The result still has to satisfy the same rules a local
+sign-up does — 3-30 characters, letters, digits and underscores, never starting with a digit.
+
+The account falls back to a generated `username_12345` (five random digits) when the display name
+cannot produce a valid username:
+
+| Display name | Username | Why |
+|---|---|---|
+| `Ahmed Khaled` | `ahmed_khaled` | |
+| `Ahmed Gomaa 2` | `ahmed_gomaa_2` | |
+| `José Álvarez` | `username_31882` | accented Latin is not English |
+| `أحمد خالد` | `username_48213` | not English |
+| `O'Brien` | `username_70654` | punctuation is not English |
+| `50 Cent` | `username_11907` | would start with a digit |
+| `Li` | `username_62240` | shorter than three characters |
+| *(none sent)* | `username_85431` | |
+
+If the derived name is already taken, random digits are appended instead — `ahmed_khaled_48213` —
+so the name is kept rather than thrown away. Usernames are unique across both flows: a Google
+sign-in can never take a name a local account already holds.
+
+**`email` and `googleId` use partial unique indexes** (`{ $gt: "" }`), not sparse ones. Since the
+fields are genuinely absent, sparse would be enough *today*, but partial is what makes the
+migration off the older schemas safe, and the difference is easy to get wrong:
+
+- A **plain** unique index treats `null` as a value, so two accounts without an email collide.
+- A **sparse** unique index skips only *missing* fields. A field explicitly set to `null` or `""`
+  is present, so it is still indexed and still collides — this is what earlier versions of this
+  schema hit.
+- A **partial** index on `{ $gt: "" }` matches non-empty strings only, so absent, `null` and `""`
+  are all excluded, while real values stay unique.
+
+There are tests for exactly this: three local accounts are created in a row, which fails under
+either of the first two designs.
+
 ### Error response
 
 Every failure uses the same envelope:
@@ -407,7 +455,7 @@ Set `SWAGGER_ENABLED=false` to stop serving `/docs`.
 npm test
 ```
 
-47 tests across 7 files. They spin up their own in-memory MongoDB, so **no running database is
+73 tests across 9 files. They spin up their own in-memory MongoDB, so **no running database is
 required** and your development data is never touched.
 
 | File | Covers |
@@ -419,6 +467,8 @@ required** and your development data is never touched.
 | `tests/integration/auth.google.test.ts` | Full OAuth callback with Google's token exchange mocked |
 | `tests/integration/openapi.test.ts` | Docs match the real routes; Swagger UI loads |
 | `tests/integration/system.test.ts` | Root ping and the health endpoint |
+| `tests/unit/username.test.ts` | Deriving a username from a Google display name |
+| `tests/integration/user-document.test.ts` | What each flow stores, and the unique constraints |
 
 ---
 
@@ -441,24 +491,35 @@ git commit -m "docs: fix a typo [skip-tests]"
 The marker is honoured whether it lands in an individual commit or in the squash/merge commit a
 pull request produces. Manually dispatched runs always test.
 
-### Index sync
+### What "applying the schema" means here
 
 **MongoDB has no server-side schema.** Documents are shaped and validated by this application, not
-by Atlas, so most model edits need nothing applied to the cluster at all. The one part of a Mongoose
-schema that *is* real cluster state is its **indexes** — here, the `unique` + `sparse` constraints
-on `username`, `email` and `googleId`, which are what make duplicate accounts impossible.
-
-[`src/scripts/sync-indexes.ts`](src/scripts/sync-indexes.ts) reconciles them. It scans
-`src/models/` so a newly added model cannot be forgotten, then reports and applies the difference:
+by Atlas, so most model edits need nothing applied to the cluster at all. Two things are the
+exception, and `npm run db:migrate` runs both, in this order:
 
 ```bash
-npm run db:indexes:check   # report the difference, change nothing
-npm run db:indexes         # apply it
+npm run db:backfill:check && npm run db:indexes:check   # report, change nothing
+npm run db:migrate                                      # backfill, then indexes
 ```
 
-The `db-sync` job runs the same command against Atlas after the tests pass, so an index added to a
-model reaches the cluster on merge. A failed test job blocks it; a *skipped* one (via
-`[skip-tests]`) does not.
+**1. Data backfill** — [`src/scripts/backfill-users.ts`](src/scripts/backfill-users.ts) brings
+documents up to the current shape: it removes the `""` and `null` placeholders earlier versions of
+the schema wrote, drops `displayName` and `avatarUrl` (no longer stored), and gives any account
+without a username one by the same rules a live Google sign-in uses. It works on
+the raw collection rather than the model, since the model's own defaults would hide the gap. Safe
+to run repeatedly.
+
+**2. Index sync** — [`src/scripts/sync-indexes.ts`](src/scripts/sync-indexes.ts) reconciles the
+indexes, which *are* real cluster state: the unique constraint on `username` and the partial unique
+constraints on `email` and `googleId`. It scans `src/models/` so a newly added model cannot be
+forgotten.
+
+**The order is not optional.** `username` is uniquely indexed, so two legacy accounts without one
+both index as `null` and the build fails with `E11000 dup key: { username: null }`. The backfill has
+to give them usernames first.
+
+The `db-sync` job runs `db:migrate` against Atlas after the tests pass, so a model change reaches
+the cluster on merge. A failed test job blocks it; a *skipped* one (via `[skip-tests]`) does not.
 
 To enable it:
 
@@ -470,21 +531,23 @@ To enable it:
    Access must either allow `0.0.0.0/0` (access then rests entirely on the database credentials) or
    have the runner's IP added and removed around the job through the Atlas Admin API.
 
-Two things worth knowing before you rely on it:
+Three things worth knowing before you rely on it:
 
 - `syncIndexes()` **drops** any index the schema no longer declares, so an index created by hand in
   the Atlas UI will be removed on the next run. Run `npm run db:indexes:check` first to see the
   plan.
 - In production the app no longer builds indexes itself (`autoIndex` is off in
   [`src/config/database.ts`](src/config/database.ts)), because doing so on Atlas would be retried on
-  every serverless cold start. This job is what creates them.
+  every serverless cold start. This job is what creates them. Both scripts also connect with
+  `autoIndex: false`, so nothing builds an index behind their back while they work.
+- The backfill is a *one-off shaped* script: it knows about the user document and nothing else.
 
 ### What this does not cover
 
-Renaming a field, changing its type, or making an optional field required needs a **data
-migration** — existing documents have to be rewritten, and nothing can infer that from the schema.
-Index sync will not do it and will not warn you. A dedicated migration tool such as `migrate-mongo`
-is the usual answer when that day comes.
+The backfill handles the migration this change needed. The next one — renaming a field, changing
+its type, making an optional field required — will need its own script, and nothing can infer it
+from the schema. Once there is more than one, a versioned migration tool such as `migrate-mongo`
+(which records what has already run) is the usual answer, rather than more hand-written scripts.
 
 ---
 
@@ -499,7 +562,9 @@ src/
 │   ├── database.ts              # Mongoose connection (+ in-memory mode)
 │   └── swagger.ts               # OpenAPI document and Swagger UI
 ├── models/user.model.ts         # Mongoose user schema
-├── scripts/sync-indexes.ts      # Reconciles Atlas indexes with the schemas
+├── scripts/
+│   ├── sync-indexes.ts          # Reconciles Atlas indexes with the schemas
+│   └── backfill-users.ts        # Brings older user documents to the current shape
 ├── schemas/api.schemas.ts       # Shared response envelopes -> OpenAPI
 ├── modules/auth/
 │   ├── auth.routes.ts           # Routes + their OpenAPI schemas
@@ -508,6 +573,7 @@ src/
 │   ├── auth.schemas.ts          # Username and password rules
 │   ├── auth.token.ts            # Access-token issuing
 │   ├── auth.cookies.ts          # OAuth `state` cookie only
+│   ├── username.ts              # Derives a username from a Google display name
 │   └── google-oauth.service.ts  # Google authorization URL + code exchange
 ├── middleware/
 │   ├── authenticate.ts          # Bearer token guard

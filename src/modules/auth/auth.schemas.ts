@@ -79,9 +79,8 @@ export type GoogleCallbackQuery = z.infer<typeof googleCallbackQuerySchema>;
 
 export interface UserResponse {
   id: string;
-  username?: string;
+  username: string;
+  /** Absent on accounts created with a username and password. */
   email?: string;
-  displayName?: string;
-  avatarUrl?: string;
   authProviders: string[];
 }

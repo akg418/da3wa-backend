@@ -94,20 +94,15 @@ export const userSchema = z.object({
     description: 'MongoDB ObjectId of the user.',
     examples: ['6a9ad9288c047ed0a05e2d83'],
   }),
-  username: z.string().optional().meta({
-    description: 'Lowercased username. Absent for accounts created through Google.',
+  username: z.string().meta({
+    description:
+      'Lowercased username, always present. For Google accounts it is derived from the display name (spaces become underscores), or generated as `username_12345` when the display name is missing or not English.',
     examples: ['alice_99'],
   }),
   email: z.string().optional().meta({
-    description: 'Email address. Only set for accounts that signed in with Google.',
+    description:
+      'Email address from Google. Absent on accounts created with a username and password.',
     examples: ['alice@example.com'],
-  }),
-  displayName: z.string().optional().meta({
-    description: 'Full name supplied by Google.',
-    examples: ['Alice Smith'],
-  }),
-  avatarUrl: z.string().optional().meta({
-    description: 'Profile picture supplied by Google.',
   }),
   authProviders: z.array(z.enum(['local', 'google'])).meta({
     description:
