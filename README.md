@@ -165,6 +165,9 @@ manually after editing environment variables.
 With the server running:
 
 ```bash
+# 0. Is the service up at all?
+curl http://localhost:3000/
+
 # 1. Is the service and its database healthy?
 curl http://localhost:3000/api/v1/health
 # {"success":true,"data":{"status":"ok","database":"connected"}}
@@ -308,7 +311,8 @@ Base path: `/api/v1`
 | `GET` | `/auth/me` | Bearer | Profile of the authenticated user |
 | `POST` | `/auth/logout` | Bearer | Acknowledgement; the client discards its token |
 
-Outside the base path: `GET /docs`, `GET /docs/json`, `GET /docs/yaml`.
+Outside the base path: `GET /` (liveness ping, answers `{"success":true,"data":{"message":"pong"}}`
+without touching MongoDB), `GET /docs`, `GET /docs/json`, `GET /docs/yaml`.
 
 Routes under `/auth` are rate limited to **10 requests per minute per IP** and answer `429` with a
 `retry-after` header beyond that. CORS preflights do not count toward the limit.

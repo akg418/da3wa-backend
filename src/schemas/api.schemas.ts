@@ -155,6 +155,17 @@ export const redirectResponse = z
   .null()
   .meta({ description: 'Redirect. Follow the `Location` response header.' });
 
+export const pingResponse = z
+  .object({
+    success: z.literal(true),
+    data: z.object({
+      message: z.literal('pong').meta({
+        description: 'Always `pong`. Confirms the process is reachable.',
+      }),
+    }),
+  })
+  .meta({ description: 'The service is reachable.' });
+
 const healthDataSchema = z.object({
   status: z.enum(['ok', 'degraded']).meta({
     description: '`ok` when the database is reachable, `degraded` otherwise.',

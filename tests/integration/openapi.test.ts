@@ -107,7 +107,7 @@ describe('OpenAPI document', () => {
     );
 
     // Guards against the tree parser silently returning nothing.
-    expect(real.size).toBe(7);
+    expect(real.size).toBe(8);
     expect(documented).toEqual(real);
   });
 
